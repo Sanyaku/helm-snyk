@@ -160,11 +160,12 @@ test("yargs causes process exit if no args", () => {
   expect(mockProcessExit).toHaveBeenCalledWith(1);
 });
 
-test("handles debug flag", () => {
+test("handles debug env var", () => {
+  process.env.HELM_DEBUG = "true"
   const path = ".";
   const chartPath = `${path}/Chart.yaml`;
   fs.writeFileSync(chartPath, "");
-  const inputArgs = ["test", path, "--debug"];
+  const inputArgs = ["test", path];
 
   const parsedArgs = parseInputParameters(inputArgs);
 

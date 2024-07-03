@@ -76,6 +76,10 @@ const isValidChartDirectory = argv => {
 };
 
 const parseOptions = (argv: any) => {
+  // quick fix:  grab HELM_DEBUG env var here.  we should probably grab it at the top level with SNYK_TOKEN instead,
+  // but that change touches more places.
+  const helmDebug: string = process.env.HELM_DEBUG ? process.env.HELM_DEBUG : "";
+
   const options = {
     inputDirectory: "",
     output: "",
@@ -95,8 +99,9 @@ const parseOptions = (argv: any) => {
   if (argv.notest) {
     options.notest = argv.notest;
   }
-  if (argv.debug) {
-    options.debug = argv.debug;
+  // helm never passes --debug
+  if (helmDebug) {
+    options.debug = Boolean(helmDebug);
   }
   options.helmTemplateOptions = parseHelmTemplateOptions(argv);
 

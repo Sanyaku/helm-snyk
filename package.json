@@ -1,6 +1,6 @@
 {
   "name": "@snyk/helm-snyk",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "description": "",
   "main": "dist/main.js",
   "scripts": {
@@ -53,6 +53,7 @@
     "scripts": [
       "dist/**/*.js"
     ],
-    "assets": []
+    "assets": [],
+    "targets": ["node10-linux-x64", "node10-macos-x64", "node10-win-x64"]
   }
 }
