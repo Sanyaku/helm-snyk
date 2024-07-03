@@ -83,3 +83,21 @@ $ helm snyk test stable/mysql --json
 For further options and features see the help instructions with the `--help` flag.
 
 
+# Development
+To get this compiling (since it's built on node10) I have had to do the following.  Assumes `nvm` and `asdf` w/its python plugin are installed:
+
+```bash
+asdf local python 2.7.18
+nvm install 10
+nvm use 10
+```
+
+Because I don't have access to the CI environment (which probably fails due to asking for the latest node LTS), I have had
+to build and install locally:
+
+```bash
+# the helm plugin install creates a symlink to this dir, but also downloads the latest release binary from snyk-labs.
+# this is not our version, so we overwrite it in the next step.
+helm plugin install .  
+npm run build && npm run pkg && cp helm-snyk-macos bin
+```

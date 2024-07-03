@@ -13,7 +13,7 @@ test("validate zero exit code and stdout captured", async () => {
   // jest.resetModules();
   jest.doMock("child_process", () => {
     return {
-      exec: jest.fn((command, callback) => callback(null, "ok", ""))
+      exec: jest.fn((command, opts, callback) => callback(null, "ok", ""))
     };
   });
   const mainModule = require("../main");
@@ -33,7 +33,7 @@ test("validate non-zero exit code captured", async () => {
 
   jest.doMock("child_process", () => {
     return {
-      exec: jest.fn((command, callback) => callback(err, "failed", ""))
+      exec: jest.fn((command, opts, callback) => callback(err, "failed", ""))
     };
   });
   const mainModule = require("../main");
@@ -49,7 +49,7 @@ test("validate non-zero exit code captured", async () => {
 test("validate stderr captured", async () => {
   jest.doMock("child_process", () => {
     return {
-      exec: jest.fn((command, callback) => callback(null, "", "error"))
+      exec: jest.fn((command, opts, callback) => callback(null, "", "error"))
     };
   });
   const mainModule = require("../main");

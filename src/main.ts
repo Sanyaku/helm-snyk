@@ -5,10 +5,12 @@ import stream from "stream";
 import fs from "fs";
 import { IArgs, parseInputParameters } from "./cli-args";
 import { ChildProcess, exec, ExecException } from "child_process";
+import {DockerOptions} from "dockerode";
 
 const SNYK_CLI_DOCKER_IMAGE_NAME = "snyk/snyk:docker";
 
 let isDebugSet: boolean = false;
+let dockerHostConfig: DockerOptions
 
 export interface SnykResult {
   imageName: string;
@@ -30,7 +32,7 @@ export interface IExecCommandResult {
 
 export async function runCommand(fullCommand: string): Promise<IExecCommandResult> {
   return new Promise<IExecCommandResult>((resolve, reject) => {
-    const res: ChildProcess = exec(fullCommand, (err: ExecException | null, stdout: string, stderr: string) => {
+    const res: ChildProcess = exec(fullCommand, { maxBuffer: 1024*1024*1024 },(err: ExecException | null, stdout: string, stderr: string) => {
       if (err) {
         const retValue = {
           exitCode: err.code,
@@ -52,7 +54,7 @@ export async function runCommand(fullCommand: string): Promise<IExecCommandResul
 
 export async function pullImage(imageName: string): Promise<string> {
   logDebug(`pulling image: ${imageName}`);
-  const docker = new Docker();
+  const docker = new Docker(getDockerOptions());
   return new Promise<string>((resolve, reject) => {
     docker.pull(imageName, (err, stream) => {
       if (err) {
@@ -77,9 +79,62 @@ export async function pullImage(imageName: string): Promise<string> {
   });
 }
 
-async function runSnykTestWithDocker(snykToken: string, snykCLIImageName: string, imageToTest: string, options: any): Promise<string> {
-  const docker = new Docker();
+function getDockerOptions(){
+  if(!dockerHostConfig) {
+    let dockerHost: string = process.env.DOCKER_HOST ? process.env.DOCKER_HOST : "";
+    const defaultDockerHost = "/var/run/docker.sock"
 
+    if(!dockerHost) {
+      // this may be macos specific?  todo: allow configuration?  needs try/catch?
+      try {
+        const dockerConfigPath = process.env.HOME + "/.docker/config.json"
+        const dockerConfigFile: string = fs.readFileSync(dockerConfigPath, "utf8");
+        const selectedContext = JSON.parse(dockerConfigFile).currentContext
+        const dockerContextMetaPath = process.env.HOME + "/.docker/contexts/meta"
+        const dockerContextMetas = fs.readdirSync(dockerContextMetaPath, "utf8")
+        logDebug("Current docker context is '" + selectedContext + "'")
+
+        dockerContextMetas.forEach(meta => {
+          const metaPath = path.join(dockerContextMetaPath, meta, "meta.json")
+          const dockerContextFile: string = fs.readFileSync(metaPath, "utf8");
+          const thisContext = JSON.parse(dockerContextFile)
+          const thisContextName = thisContext.Name
+          logDebug("Found meta for context'" + thisContextName + "'")
+          if (thisContextName === selectedContext) {
+            dockerHost = thisContext.Endpoints.docker.Host
+          }
+        })
+      } catch (err) {
+        logDebug(err.code)
+        logDebug(err.stdout)
+        logDebug(err.stderr)
+        logDebug("Unable to read docker context, assuming files don't exist")
+      }
+    }
+
+    if (!dockerHost) {
+      console.warn("DOCKER_HOST environment variable is not set and docker context config does not exist; defaulting to " + defaultDockerHost);
+      dockerHost = defaultDockerHost
+    }
+
+    logDebug("Using docker host: " + dockerHost)
+    const dockerHostUrl = new URL(dockerHost)
+
+    if(dockerHostUrl.protocol !== "unix:"){
+      console.error("Docker host must be a unix socket")
+      process.exit(2)
+    }
+
+    dockerHostConfig =  {
+      socketPath: dockerHostUrl.host + "/" + dockerHostUrl.pathname
+    }
+  }
+  return dockerHostConfig
+}
+
+async function runSnykTestWithDocker(snykToken: string, snykCLIImageName: string, imageToTest: string, options: any): Promise<string> {
+
+  const docker = new Docker(getDockerOptions());
   const myStdOutCaptureStream = new stream.Writable();
   let stdoutString = "";
   myStdOutCaptureStream._write = function(chunk, encoding, done) {
@@ -96,7 +151,7 @@ async function runSnykTestWithDocker(snykToken: string, snykCLIImageName: string
 
   const createOptions = {
     env: [`SNYK_TOKEN=${snykToken}`],
-    Binds: ["/var/run/docker.sock:/var/run/docker.sock"],
+    Binds: [ dockerHostConfig.socketPath + ":/var/run/docker.sock"],
     Tty: false
   };
 
@@ -108,7 +163,7 @@ async function runSnykTestWithDocker(snykToken: string, snykCLIImageName: string
       if (err) {
         reject(err);
       } else {
-        logDebug(`runSnykTestWithDocker(${imageToTest}): data.StatusCode: ${data.StatusCode}`);
+        logDebug(`runSnykTestWithDocker(${imageToTest}): data.StatusCode: ${JSON.stringify(data)}`);
         // exit code 0: 0 means no issues detected
         // exit code 1: issues detected by Snyk
         // exit code 2:some error, for example the image you're trying to test doesn't exist locally, etc
@@ -190,7 +245,7 @@ export async function mainWithParams(args: IArgs, snykToken: string) {
     const helmCommandResObj: IExecCommandResult = await runCommand(helmCommand);
     renderedTemplates = helmCommandResObj.stdout;
   } catch (err) {
-    console.error(err.stderr);
+    console.error(err);
     console.info(`try to run '${helmCommand}' first!`);
     return;
   }
@@ -213,6 +268,7 @@ export async function mainWithParams(args: IArgs, snykToken: string) {
       if (doTest) {
         await pullImage(imageName);
         const rawResult = await runSnykTestWithDocker(snykToken, SNYK_CLI_DOCKER_IMAGE_NAME, imageName, args);
+        logDebug("Raw result: " + rawResult)
         response.result = args.json ? JSON.parse(rawResult) : rawResult;
         allOutputData.push(response);
         if (args.debug) console.debug(response);
@@ -271,10 +327,23 @@ export const handleOutput = (output, options) => {
 };
 
 async function main() {
-  const snykToken: string = process.env.SNYK_TOKEN ? process.env.SNYK_TOKEN : "";
+  let snykToken: string = process.env.SNYK_TOKEN ? process.env.SNYK_TOKEN : "";
   if (!snykToken) {
-    console.error("SNYK_TOKEN environment variable is not set");
-    process.exit(2);
+    try {
+      // this may be macos specific?  todo: allow configuration?
+      const snykConfigPath = process.env.HOME + "/.config/configstore/snyk.json"
+      const snykConfigFile: string = fs.readFileSync(snykConfigPath, "utf8");
+      snykToken = JSON.parse(snykConfigFile).api
+    } catch (err) {
+      console.debug(err.code)
+      console.debug(err.stderr)
+      console.debug("Unable to parse snyk config file.  Assuming it's missing.")
+    }
+
+    if (!snykToken) {
+      console.error("SNYK_TOKEN environment variable is not set and snyk local config does not exist");
+      process.exit(2);
+    }
   }
 
   const inputArgs = process.argv.slice(2);
